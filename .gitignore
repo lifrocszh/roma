@@ -6,5 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# Local config
+config/api_keys.toml
+
+
 # Virtual environments
 .venv

@@ -1,0 +1,8 @@
+# Copy this file to `config/api_keys.toml` and fill in real values locally.
+
+[providers]
+deepseek_api_key = ""
+tavily_api_key = ""
+
+[runtime]
+default_search_provider = "tavily"
