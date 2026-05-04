@@ -9,6 +9,7 @@ import typer
 from src.cli.optimize import optimize_command
 from src.cli.run import run_command
 from src.core.models import TaskType
+from src.evaluation.eval_MMLU_pro import run_benchmark_async as eval_mmlu_command
 
 
 app = typer.Typer(
@@ -24,6 +25,24 @@ app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
+
+
+
+@app.command("eval-mmlu")
+def eval_mmlu(
+    num_questions: int = typer.Option(500, "--num-questions", "-n", help="Number of questions to sample."),
+    parallel: int = typer.Option(5, "--parallel", "-p", help="Number of parallel roma run calls."),
+    output: Path = typer.Option(Path("outputs.json"), "--output", "-o", help="Output JSON file path."),
+) -> None:
+    """Run a balanced MMLU-Pro evaluation. Each question is answered via `roma run`."""
+    import asyncio
+    asyncio.run(
+        eval_mmlu_command(
+            num_questions=num_questions,
+            parallel=parallel,
+            output=output,
+        )
+    )
 
 
 @app.callback()
@@ -48,7 +67,11 @@ def run(
     api_keys: str = typer.Option(None, "--api-keys", help="Path to a local TOML file with API keys."),
     quiet: bool = typer.Option(False, "--quiet", help="Suppress intermediate streamed events and print only final output."),
 ) -> None:
-    """Run a natural-language task through ROMA."""
+    """Run a natural-language task through ROMA.
+
+    In normal mode all trace events and tool calls are shown.
+    Use ``--quiet`` to print only the final answer.
+    """
     run_command(task=task, config_path=config, context=context, api_keys_path=api_keys, quiet=quiet)
 
 

@@ -9,6 +9,17 @@ import tomllib
 
 import typer
 
+
+def _safe_echo(text: str) -> None:
+    """Print *text* handling Unicode characters that may not be representable
+    in the current terminal encoding (e.g. cp1252 on Windows)."""
+    try:
+        typer.echo(text)
+    except UnicodeEncodeError:
+        # Fall back to ASCII with replacement
+        cleaned = text.encode("ascii", errors="xmlcharrefreplace").decode("ascii")
+        typer.echo(cleaned)
+
 from src.components import build_default_registry
 from src.config.loader import load_config
 from src.core.controller import RomaController
@@ -27,13 +38,29 @@ def run_command(
     runtime = config.runtime
     resolved_api_keys_path = Path(api_keys_path) if api_keys_path is not None else runtime.api_keys_path
     api_keys = _load_api_keys(resolved_api_keys_path)
-    deepseek_key = api_keys.get("deepseek_api_key") or api_keys.get("openai_api_key")
+
+    # --- API key resolution: openrouter > deepseek > openai ---
+    openrouter_key = api_keys.get("openrouter_api_key")
+    deepseek_key = api_keys.get("deepseek_api_key")
+    openai_key = api_keys.get("openai_api_key")
+
+    if openrouter_key and not os.getenv("OPENROUTER_API_KEY"):
+        os.environ["OPENROUTER_API_KEY"] = openrouter_key
     if deepseek_key and not os.getenv("DEEPSEEK_API_KEY"):
         os.environ["DEEPSEEK_API_KEY"] = deepseek_key
-    if deepseek_key and not os.getenv("OPENAI_API_KEY"):
-        os.environ["OPENAI_API_KEY"] = deepseek_key
-    os.environ.setdefault("ROMA_MODEL", "deepseek-v4-flash")
-    os.environ.setdefault("ROMA_BASE_URL", "https://api.deepseek.com")
+    if openai_key and not os.getenv("OPENAI_API_KEY"):
+        os.environ["OPENAI_API_KEY"] = openai_key
+
+    # --- Model selection ---
+    openrouter_model = api_keys.get("openrouter_model")
+    if openrouter_model:
+        os.environ.setdefault("ROMA_MODEL", openrouter_model)
+    elif deepseek_key:
+        os.environ.setdefault("ROMA_MODEL", "deepseek-v4-flash")
+        os.environ.setdefault("ROMA_BASE_URL", "https://api.deepseek.com")
+    elif openai_key:
+        os.environ.setdefault("ROMA_MODEL", "gpt-4o")
+
     root_task = Task(
         id="run-root",
         goal=task,
@@ -41,20 +68,40 @@ def run_command(
         context_input=context or demo.context_input,
     )
     tavily_api_key = api_keys.get("tavily_api_key")
+
+    # In normal mode (not quiet) show both trace events and verbose tool calls
+    show_traces = not quiet
     registry = build_default_registry(
         tavily_api_key=tavily_api_key,
         python_executable=sys.executable,
         limits=runtime.limits,
+        verbose=show_traces,
     )
-    controller = RomaController(registry, event_callback=None if quiet else _stream_event)
+    controller = RomaController(registry, event_callback=_stream_event if show_traces else None)
     outcome = controller.solve(root_task)
-    typer.echo("Task:")
-    typer.echo(f"  {root_task.goal}")
-    typer.echo("Result:")
-    typer.echo(outcome.output.result)
-    typer.echo(f"result={outcome.output.result}")
-    typer.echo("Trace:")
-    typer.echo(f"  child_traces={len(outcome.trace.child_traces)}")
+
+    # Extract the final answer: the last child trace's output is the "answer" subtask
+    child_outputs = outcome.trace.child_traces
+    final_answer = (
+        child_outputs[-1].output_summary
+        if child_outputs
+        else outcome.output.result
+    )
+
+    if quiet:
+        _safe_echo(final_answer)
+    else:
+        sep = "=" * 60
+        _safe_echo("")
+        _safe_echo(sep)
+        _safe_echo(f"  Result: {root_task.goal}")
+        _safe_echo(sep)
+        _safe_echo("")
+        _safe_echo(final_answer)
+        _safe_echo("")
+        _safe_echo(sep)
+        _safe_echo(f"  Subtasks: {len(child_outputs)}")
+        _safe_echo(sep)
 
 
 def _load_tavily_api_key(api_keys_path: Path) -> str | None:
@@ -67,7 +114,7 @@ def _load_api_keys(api_keys_path: Path) -> dict[str, str]:
     data = tomllib.loads(api_keys_path.read_text(encoding="utf-8"))
     providers = data.get("providers", {})
     result: dict[str, str] = {}
-    for key_name in ("tavily_api_key", "deepseek_api_key", "openai_api_key"):
+    for key_name in ("openrouter_api_key", "openrouter_model", "tavily_api_key", "deepseek_api_key", "openai_api_key"):
         value = providers.get(key_name)
         if isinstance(value, str) and value.strip():
             result[key_name] = value.strip()
@@ -75,32 +122,54 @@ def _load_api_keys(api_keys_path: Path) -> dict[str, str]:
 
 
 def _stream_event(kind: str, payload: dict[str, object], trace: object) -> None:
+    """Stream a trace event to stdout with clean formatting."""
     task_id = getattr(trace, "task_id", "unknown")
     depth = str(task_id).count(".")
     indent = "  " * depth
+
     if kind == "task_started":
-        typer.echo(f"{indent}task_started: {task_id}")
+        _safe_echo(f"{indent}> start:  {payload.get('task_type', '?')} :: {task_id}")
+
     elif kind == "atomizer_decision":
-        typer.echo(f"{indent}atomizer: {payload.get('node_type')} - {payload.get('rationale')}")
+        node = payload.get("node_type", "?")
+        reason = payload.get("rationale", "")
+        _safe_echo(f"{indent}> decide: {node} — {reason}")
+
     elif kind == "planner_output":
-        typer.echo(
-            f"{indent}planner: {payload.get('subtask_count')} subtasks, batches={payload.get('dependency_batches')}"
-        )
-    elif kind == "batch_started":
-        typer.echo(f"{indent}batch_started: {payload.get('task_ids')}")
-    elif kind == "child_started":
-        typer.echo(f"{indent}child_started: {payload.get('task_id')} -> {payload.get('goal')}")
-    elif kind == "child_completed":
-        typer.echo(f"{indent}child_completed: {payload.get('task_id')} :: {payload.get('result_preview')}")
+        count = payload.get("subtask_count", 0)
+        _safe_echo(f"{indent}> plan:   {count} subtasks")
+
     elif kind == "executor_selected":
-        typer.echo(f"{indent}executor: {payload.get('executor')} ({payload.get('task_type')})")
+        ex = payload.get("executor", "?")
+        tt = payload.get("task_type", "?")
+        tools = payload.get("allowed_tools", [])
+        tool_str = f" [{', '.join(tools)}]" if tools else ""
+        _safe_echo(f"{indent}> run:    {ex} ({tt}){tool_str}")
+
     elif kind == "executor_completed":
-        typer.echo(f"{indent}executor_completed: {payload.get('result_preview')}")
+        preview = (payload.get("result_preview", "") or "")[:160]
+        _safe_echo(f"{indent}> done:   {preview}")
+
+    elif kind == "child_started":
+        goal = (payload.get("goal", "") or "")[:120]
+        _safe_echo(f"{indent}> child:  {payload.get('task_id')} — {goal}")
+
+    elif kind == "child_completed":
+        preview = (payload.get("result_preview", "") or "")[:120]
+        _safe_echo(f"{indent}> child:  {payload.get('task_id')} ✓ {preview}")
+
+    elif kind == "batch_started":
+        _safe_echo(f"{indent}> batch:  {payload.get('task_ids')}")
+
     elif kind == "aggregation_completed":
-        typer.echo(f"{indent}aggregation: {payload.get('summary_preview')}")
+        preview = (payload.get("summary_preview", "") or "")[:120]
+        _safe_echo(f"{indent}> merge:  {preview}")
+
     elif kind == "guard_triggered":
-        typer.echo(f"{indent}guard_triggered: {payload.get('error')}")
+        _safe_echo(f"{indent}> GUARD:  {payload.get('error')}")
+
     elif kind == "planner_validation_failed":
-        typer.echo(f"{indent}planner_validation_failed: {payload.get('error')}")
+        _safe_echo(f"{indent}> ERROR:  planner — {payload.get('error')}")
+
     elif kind == "task_failed":
-        typer.echo(f"{indent}task_failed: {payload.get('error')}")
+        _safe_echo(f"{indent}> ERROR:  {payload.get('error')}")

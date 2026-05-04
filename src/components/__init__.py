@@ -11,14 +11,20 @@ def build_default_registry(
     tavily_api_key: str | None = None,
     python_executable: str = "python",
     limits: RuntimeLimits | None = None,
+    verbose: bool = False,
 ) -> ComponentRegistry:
-    """Construct a working Stage 2 registry with default components."""
+    """Construct a working Stage 2 registry with default components.
+
+    When *verbose* is ``True``, every tool call is printed to stdout with its
+    inputs, outputs, duration, and success/failure status.
+    """
 
     registry = ComponentRegistry(
         atomizer=DefaultAtomizer(),
         planner=DefaultPlanner(),
         aggregator=DefaultAggregator(),
         limits=limits,
+        verbose=verbose,
     )
     registry.register_tool(WebSearchToolkit(api_key=tavily_api_key))
     registry.register_tool(CodeSandbox(python_executable=python_executable))

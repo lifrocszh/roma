@@ -55,6 +55,14 @@ class DefaultAtomizer(Atomizer):
             plan = True
             reasons.append("explicit ordered stages detected")
 
+        if task.task_type in (TaskType.RETRIEVE,):
+            plan = True
+            reasons.append("retrieval tasks benefit from query, gather, and synthesize stages")
+
+        if any(token in lower_goal for token in ["search", " fetch ", "http", "www.", ".com", "url", "look up"]):
+            plan = True
+            reasons.append("goal requires searching or fetching external data")
+
         if plan:
             return AtomizerDecision(
                 node_type=NodeType.PLAN,

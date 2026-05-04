@@ -61,8 +61,46 @@ class BaseTool(ABC):
         return result
 
 
+# ---------------------------------------------------------------------------
+# Verbose tool wrapper -- prints inputs/outputs to stdout for observability
+# ---------------------------------------------------------------------------
+
+
+def _verbose_tool_wrapper(tool: BaseTool) -> BaseTool:
+    """Wrap a tool so every invocation prints inputs and outputs to stdout."""
+    original_invoke = tool.invoke
+
+    def _invoke_with_trace(**kwargs: Any) -> ToolResult:
+        # Format the kwargs for display
+        args_preview = ", ".join(
+            f"{k}={repr(v)[:120]}" for k, v in kwargs.items()
+        )
+        print(f">>> tool [{tool.name}]({args_preview})")
+        started = time.perf_counter()
+        try:
+            result = original_invoke(**kwargs)
+            elapsed = (time.perf_counter() - started) * 1000
+            status = "OK" if result.ok else "FAIL"
+            out_preview = result.output[:200].replace("\n", "\\n")
+            print(f"<<< tool [{tool.name}] {status} ({elapsed:.0f}ms): {out_preview}")
+            return result
+        except Exception as exc:
+            elapsed = (time.perf_counter() - started) * 1000
+            print(f"<<< tool [{tool.name}] ERROR ({elapsed:.0f}ms): {exc}")
+            raise
+
+    tool.invoke = _invoke_with_trace  # type: ignore[method-assign]
+    return tool
+
+
 class WebSearchToolkit(BaseTool):
-    """Tavily-backed web search adapter."""
+    """Web tool that supports both search and page content extraction.
+
+    Usage modes (controlled via the ``action`` kwarg):
+
+    * ``search`` (default) — Tavily-backed web search. Expects ``query``.
+    * ``extract`` — Tavily-backed page content extraction. Expects ``url``.
+    """
 
     def __init__(
         self,
@@ -75,28 +113,100 @@ class WebSearchToolkit(BaseTool):
         self.api_key = api_key
         self.max_results = max_results
 
-    def invoke(self, **kwargs: Any) -> ToolResult:
-        query = kwargs.get("query")
-        if not query:
-            raise ToolError("web search requires a non-empty query")
+    # ------------------------------------------------------------------
+    # Internal Tavily client helper
+    # ------------------------------------------------------------------
 
-        started = time.perf_counter()
+    def _client(self) -> object:
         if not self.api_key:
             raise ToolError("missing Tavily API key")
-
         try:
             from tavily import TavilyClient
+
+            return TavilyClient(api_key=self.api_key)
         except ImportError as exc:
             raise ToolError("tavily-python is not installed") from exc
 
-        client = TavilyClient(api_key=self.api_key)
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def invoke(self, **kwargs: Any) -> ToolResult:
+        action = kwargs.get("action", "search")
+        if action == "extract":
+            return self._extract(**kwargs)
+        return self._search(**kwargs)
+
+    # ------------------------------------------------------------------
+    # Search (Tavily)
+    # ------------------------------------------------------------------
+
+    def _search(self, **kwargs: Any) -> ToolResult:
+        query = kwargs.get("query")
+        if not query:
+            raise ToolError("web_search (search) requires a non-empty query")
+
+        # Tavily API enforces a 400-char limit; truncate gracefully
+        if len(query) > 400:
+            query = query[:397] + "..."
+
+        started = time.perf_counter()
+        client = self._client()
         response = client.search(query=query, max_results=kwargs.get("max_results", self.max_results))
         duration_ms = (time.perf_counter() - started) * 1000
         result = ToolResult(
             tool_name=self.name,
             ok=True,
             output=str(response),
-            metadata={"query": query, "result_count": len(response.get("results", []))},
+            metadata={"query": query, "result_count": len(response.get("results", [])), "action": "search"},
+            duration_ms=duration_ms,
+        )
+        return self._log_result(result)
+
+    # ------------------------------------------------------------------
+    # Extract (Tavily client.extract)
+    # ------------------------------------------------------------------
+
+    def _extract(self, **kwargs: Any) -> ToolResult:
+        url = kwargs.get("url") or kwargs.get("query")
+        if not url:
+            raise ToolError("web_search (extract) requires a url")
+
+        # Normalise: prepend https:// if no scheme present
+        url = url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+
+        started = time.perf_counter()
+        client = self._client()
+        response = client.extract(urls=[url])
+        duration_ms = (time.perf_counter() - started) * 1000
+
+        results = response.get("results", [])
+        failed = response.get("failed_results", [])
+
+        if results and results[0].get("raw_content"):
+            raw = results[0]["raw_content"]
+            output = raw[:15000] + "\n\n[... truncated ...]" if len(raw) > 15000 else raw
+            ok = True
+        elif failed:
+            err = failed[0].get("error", "unknown error")
+            output = f"Failed to extract {url}: {err}"
+            ok = False
+        else:
+            output = f"No content extracted from {url}"
+            ok = False
+
+        result = ToolResult(
+            tool_name=self.name,
+            ok=ok,
+            output=output,
+            metadata={
+                "url": url,
+                "action": "extract",
+                "content_length": len(output),
+                "failed_count": len(failed),
+            },
             duration_ms=duration_ms,
         )
         return self._log_result(result)
@@ -209,7 +319,11 @@ class ExecutorToolView:
 
 
 class ComponentRegistry:
-    """Holds component instances, executor routing, and tool permissions."""
+    """Holds component instances, executor routing, and tool permissions.
+
+    When *verbose* is ``True``, every tool call is printed to stdout with its
+    inputs, outputs, duration, and success/failure status.
+    """
 
     def __init__(
         self,
@@ -219,18 +333,22 @@ class ComponentRegistry:
         aggregator: Aggregator,
         limits: RuntimeLimits | None = None,
         logger: logging.Logger | None = None,
+        verbose: bool = False,
     ) -> None:
         self.atomizer = atomizer
         self.planner = planner
         self.aggregator = aggregator
         self.limits = limits or RuntimeLimits()
         self.logger = logger or logging.getLogger("roma.registry")
+        self._verbose = verbose
         self._tools: dict[str, BaseTool] = {}
         self._executors: dict[TaskType, ExecutorBinding] = {}
         self._lock = threading.Lock()
 
     def register_tool(self, tool: BaseTool) -> None:
         with self._lock:
+            if self._verbose:
+                tool = _verbose_tool_wrapper(tool)
             self._tools[tool.name] = tool
 
     def register_executor(

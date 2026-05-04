@@ -12,6 +12,46 @@ from src.core.registry import ExecutorToolView, ToolError
 from src.core.signatures import Executor, ExecutorOutput
 
 
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def _build_openai_client() -> OpenAI | None:
+    """Build an OpenAI-compatible client from environment variables.
+
+    Resolution order:
+    1. ``ROMA_API_KEY`` / ``ROMA_BASE_URL`` — fully custom
+    2. ``OPENROUTER_API_KEY`` → base URL ``https://openrouter.ai/api/v1``
+    3. ``DEEPSEEK_API_KEY`` → base URL ``https://api.deepseek.com``
+    4. ``OPENAI_API_KEY`` → base URL ``https://api.openai.com`` (OpenAI default)
+    """
+    api_key = os.getenv("ROMA_API_KEY")
+    base_url = os.getenv("ROMA_BASE_URL")
+
+    if api_key and base_url:
+        return OpenAI(api_key=api_key, base_url=base_url)
+
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if openrouter_key:
+        return OpenAI(
+            api_key=openrouter_key,
+            base_url=base_url or _OPENROUTER_BASE_URL,
+            default_headers={
+                "HTTP-Referer": os.getenv("OPENROUTER_REFERER", "https://github.com/roma"),
+                "X-Title": os.getenv("OPENROUTER_TITLE", "ROMA"),
+            },
+        )
+
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+    if deepseek_key:
+        return OpenAI(api_key=deepseek_key, base_url=base_url or "https://api.deepseek.com")
+
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        return OpenAI(api_key=openai_key, base_url=base_url or "https://api.openai.com/v1")
+
+    return None
+
+
 class BaseHeuristicExecutor(Executor):
     """Common base for deterministic Stage 2 executors."""
 
@@ -19,7 +59,7 @@ class BaseHeuristicExecutor(Executor):
         self.prompt = prompt
         self._supported_task_types = supported_task_types
         self._tools: ExecutorToolView | None = None
-        self._client = self._build_client()
+        self._client = _build_openai_client()
 
     @property
     def supported_task_types(self) -> frozenset[TaskType]:
@@ -27,13 +67,6 @@ class BaseHeuristicExecutor(Executor):
 
     def set_tools(self, tools: ExecutorToolView) -> None:
         self._tools = tools
-
-    def _build_client(self) -> OpenAI | None:
-        api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            return None
-        base_url = os.getenv("ROMA_BASE_URL") or "https://api.deepseek.com"
-        return OpenAI(api_key=api_key, base_url=base_url)
 
     def _tool(self, name: str):
         if self._tools is None:
@@ -76,5 +109,9 @@ class BaseHeuristicExecutor(Executor):
             choice = response.choices[0]
             content = choice.message.content if choice and choice.message else None
             return content.strip() if isinstance(content, str) and content.strip() else None
-        except Exception:
+        except Exception as exc:
+            import logging
+            logging.getLogger("roma.executor").warning(
+                "LLM call failed: model=%s error=%s", chosen_model, exc
+            )
             return None

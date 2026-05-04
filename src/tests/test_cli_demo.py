@@ -25,7 +25,5 @@ def test_run_demo_command_executes_workflow(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Task:" in result.stdout
     assert "Result:" in result.stdout
-    assert "Trace:" in result.stdout
-    assert "child_traces=3" in result.stdout
+    assert "Subtasks: 3" in result.stdout

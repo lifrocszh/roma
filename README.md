@@ -1070,6 +1070,16 @@ So the right mental model is:
 - Stage 3 is a working optimization pipeline
 - but it is still an internal, local prompt-evolution scaffold rather than a full production optimizer
 
+## Evaluation usage
+
+```bash
+# Default: 500 questions, 5 parallel
+uv run roma eval-mmlu
+
+# Custom settings
+uv run roma eval-mmlu -n 100 -p 5 -o results.json
+```
+
 ## Practical Examples
 
 Run a basic task:

@@ -124,11 +124,17 @@ class DefaultPlanner(Planner):
         ]
 
     def _plan_general(self, task: Task) -> list[Task]:
+        lower_goal = task.goal.lower()
+        needs_search = any(
+            token in lower_goal
+            for token in ["search", " fetch ", "http", "www.", ".com", "url", "look up", "find ", "who is", "what is"]
+        )
+        inputs_task_type = TaskType.RETRIEVE if needs_search else TaskType.THINK
         return [
             Task(
                 id=f"{task.id}.inputs",
                 goal=f"Collect and organize the essential inputs for: {task.goal}",
-                task_type=TaskType.THINK if task.task_type == TaskType.GENERAL else task.task_type,
+                task_type=inputs_task_type,
                 parent_id=task.id,
                 context_input=task.context_input,
                 metadata=self._leaf_metadata(),

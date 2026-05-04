@@ -5,6 +5,9 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache
+
+plan.md
 
 # Local config
 config/api_keys.toml

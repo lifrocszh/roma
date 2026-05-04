@@ -77,7 +77,6 @@ demo:
 
     assert result.exit_code == 0
     assert "Write a compact update" in result.stdout
-    assert "result=" in result.stdout
 
 
 def test_run_command_accepts_deepseek_key_name(tmp_path: Path, monkeypatch) -> None:
@@ -127,8 +126,7 @@ demo:
     assert result.exit_code == 0
     assert "task_started:" not in result.stdout
     assert "atomizer:" not in result.stdout
-    assert "Result:" in result.stdout
-    assert "result=" in result.stdout
+    # Quiet mode now prints only the final answer (no "Result:" or "result=" prefix)
 
 
 def test_optimize_command_uses_configured_base_prompt(tmp_path: Path) -> None:
