@@ -1057,17 +1057,12 @@ The current optimizer is useful, but it is still a local deterministic implement
 
 Current limitations:
 
-- no live model-based proposal generation
-- no live LLM judge
-- no benchmark-driven evaluation loop
-- no dataset integration
-- no token accounting from a provider, only rough estimation
+- no token accounting from a provider
 - no automatic prompt persistence back into config or source files
 - no multi-module joint optimization command yet
 
 So the right mental model is:
 
-- Stage 3 is a working optimization pipeline
 - but it is still an internal, local prompt-evolution scaffold rather than a full production optimizer
 
 ## Evaluation usage

@@ -263,6 +263,128 @@ class CodeSandbox(BaseTool):
         return self._log_result(result)
 
 
+class Calculator(BaseTool):
+    """Safe arithmetic calculator for evaluating math expressions.
+
+    Supports basic arithmetic (``+``, ``-``, ``*``, ``/``, ``//``, ``%``, ``**``),
+    parentheses, and common math functions via Python's ``math`` module.
+
+    Usage::
+
+        tool.invoke(expression="(3 + 5) * 2")
+    """
+
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        super().__init__(name="calculator", logger=logger)
+
+    def invoke(self, **kwargs: Any) -> ToolResult:
+        expression = kwargs.get("expression") or kwargs.get("query")
+        if not expression:
+            raise ToolError("calculator requires an expression")
+
+        started = time.perf_counter()
+        try:
+            result = self._evaluate(expression)
+            ok = True
+            output = str(result)
+            extra = {"expression": expression, "result": result}
+        except Exception as exc:
+            ok = False
+            output = f"Error: {exc}"
+            extra = {"expression": expression}
+
+        duration_ms = (time.perf_counter() - started) * 1000
+        result = ToolResult(
+            tool_name=self.name,
+            ok=ok,
+            output=output,
+            metadata=extra,
+            duration_ms=duration_ms,
+        )
+        return self._log_result(result)
+
+    @staticmethod
+    def _evaluate(expr: str) -> float | int:
+        """Evaluate a mathematical expression using a safe AST-based evaluator."""
+        import ast
+        import math
+        import operator as op
+
+        # Allowed operators
+        operators: dict[type, object] = {
+            ast.Add: op.add,
+            ast.Sub: op.sub,
+            ast.Mult: op.mul,
+            ast.Div: op.truediv,
+            ast.FloorDiv: op.floordiv,
+            ast.Mod: op.mod,
+            ast.Pow: op.pow,
+            ast.USub: op.neg,
+            ast.UAdd: op.pos,
+        }
+
+        # Allowed names (constants and math functions)
+        allowed_names: dict[str, object] = {
+            "pi": math.pi,
+            "e": math.e,
+            "inf": math.inf,
+            "nan": math.nan,
+            "abs": abs,
+            "round": round,
+            "min": min,
+            "max": max,
+            "sum": sum,
+            "sqrt": math.sqrt,
+            "sin": math.sin,
+            "cos": math.cos,
+            "tan": math.tan,
+            "log": math.log,
+            "log10": math.log10,
+            "log2": math.log2,
+            "exp": math.exp,
+            "floor": math.floor,
+            "ceil": math.ceil,
+            "factorial": math.factorial,
+            "degrees": math.degrees,
+            "radians": math.radians,
+        }
+
+        def _eval(node: ast.AST) -> float | int:
+            if isinstance(node, ast.Expression):
+                return _eval(node.body)
+            if isinstance(node, ast.Constant):
+                if isinstance(node.value, (int, float)):
+                    return node.value
+                raise TypeError(f"unsupported constant: {node.value!r}")
+            if isinstance(node, ast.UnaryOp):
+                fn = operators.get(type(node.op))
+                if fn is None:
+                    raise TypeError(f"unsupported operator: {type(node.op).__name__}")
+                return fn(_eval(node.operand))
+            if isinstance(node, ast.BinOp):
+                fn = operators.get(type(node.op))
+                if fn is None:
+                    raise TypeError(f"unsupported operator: {type(node.op).__name__}")
+                return fn(_eval(node.left), _eval(node.right))
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    fn = allowed_names.get(node.func.id)
+                    if fn is None:
+                        raise NameError(f"unknown function: {node.func.id}")
+                    args = [_eval(arg) for arg in node.args]
+                    return fn(*args)
+                raise TypeError("only simple function calls are supported")
+            if isinstance(node, ast.Name):
+                val = allowed_names.get(node.id)
+                if val is None:
+                    raise NameError(f"unknown name: {node.id}")
+                return val  # type: ignore[return-value]
+            raise TypeError(f"unsupported syntax: {type(node).__name__}")
+
+        tree = ast.parse(expr.strip(), mode="eval")
+        return _eval(tree.body)
+
+
 class FileToolkit(BaseTool):
     """Placeholder for Stage 1 file toolkit work."""
 

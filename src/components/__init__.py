@@ -3,7 +3,7 @@ from src.components.atomizer import DefaultAtomizer
 from src.components.executors import CodeExecutor, RetrieveExecutor, ThinkExecutor, WriteExecutor
 from src.components.planner import DefaultPlanner
 from src.core.models import TaskType
-from src.core.registry import CodeSandbox, ComponentRegistry, RuntimeLimits, WebSearchToolkit
+from src.core.registry import Calculator, CodeSandbox, ComponentRegistry, RuntimeLimits, WebSearchToolkit
 
 
 def build_default_registry(
@@ -26,9 +26,10 @@ def build_default_registry(
         limits=limits,
         verbose=verbose,
     )
+    registry.register_tool(Calculator())
     registry.register_tool(WebSearchToolkit(api_key=tavily_api_key))
     registry.register_tool(CodeSandbox(python_executable=python_executable))
-    registry.register_executor(ThinkExecutor(), task_types=frozenset({TaskType.GENERAL, TaskType.THINK}))
+    registry.register_executor(ThinkExecutor(), task_types=frozenset({TaskType.GENERAL, TaskType.THINK}), allowed_tools={"calculator"})
     registry.register_executor(RetrieveExecutor(), allowed_tools={"web_search"})
     registry.register_executor(WriteExecutor())
     registry.register_executor(CodeExecutor(), allowed_tools={"code_sandbox"})
@@ -36,6 +37,7 @@ def build_default_registry(
 
 
 __all__ = [
+    "Calculator",
     "CodeExecutor",
     "DefaultAggregator",
     "DefaultAtomizer",

@@ -106,7 +106,7 @@ async def _run_via_roma(
     total: int,
     query: str,
     *,
-    timeout_sec: int = 180,
+    timeout_sec: int = 300,
 ) -> str:
     """Pipe *query* via stdin into `run_command(quiet=True)` and return stdout.
 
