@@ -59,7 +59,7 @@ def run_command(
         os.environ.setdefault("ROMA_MODEL", "deepseek-v4-flash")
         os.environ.setdefault("ROMA_BASE_URL", "https://api.deepseek.com")
     elif openai_key:
-        os.environ.setdefault("ROMA_MODEL", "gpt-4o")
+        os.environ.setdefault("ROMA_MODEL", "gpt-5-mini")
 
     root_task = Task(
         id="run-root",

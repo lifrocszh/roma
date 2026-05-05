@@ -11,7 +11,7 @@ from src.prompts.seed_prompts import EXECUTOR_CODE_PROMPT
 
 class CodeExecutor(BaseHeuristicExecutor):
     def __init__(self, *, prompt: str = EXECUTOR_CODE_PROMPT) -> None:
-        super().__init__(prompt=prompt, supported_task_types=frozenset({TaskType.CODE}))
+        super().__init__(prompt=prompt, supported_task_types=frozenset({TaskType.CODE}), temperature=0.1)
 
     def execute(self, task: Task) -> ExecutorOutput:
         code = task.metadata.get("code")
@@ -20,18 +20,22 @@ class CodeExecutor(BaseHeuristicExecutor):
             try:
                 sandbox = self._tool("code_sandbox")
                 tool_result = sandbox.invoke(language=language, code=code)
-                result = f"Sandbox execution result for '{task.goal}': {tool_result.output}"
                 return self._result(
                     task=task,
-                    result=result,
+                    result=f"Sandbox execution result for '{task.goal}': {tool_result.output}",
                     strategy="sandbox execution",
                     extra={"language": language, "tool_ok": tool_result.ok},
                 )
             except ToolError:
                 pass
 
-        result = (
-            f"Code-oriented response for '{task.goal}': "
-            f"no runnable snippet was provided, so return a minimal implementation plan or code sketch."
+        result = self._generate(
+            instructions=f"Provide code or a code-oriented response for: {task.goal}",
+            context=f"Language: {language}",
         )
-        return self._result(task=task, result=result, strategy="code planning fallback", extra={"language": language})
+        return self._result(
+            task=task,
+            result=result or f"Code response for '{task.goal}' (language: {language})",
+            strategy="llm code generation" if result else "fallback",
+            extra={"language": language},
+        )

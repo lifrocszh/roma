@@ -409,7 +409,7 @@ class MCPToolkit(BaseTool):
 class RuntimeLimits:
     """Guard rails for recursive ROMA execution."""
 
-    max_recursion_depth: int = 8
+    max_recursion_depth: int = 12
     max_subtasks_per_plan: int = 12
     max_total_tasks: int = 256
     max_expansions_per_goal: int = 3

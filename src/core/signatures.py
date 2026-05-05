@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Union
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.types import AnyType
 
 from src.core.graph import TaskGraph
 from src.core.models import CONTRACT_VERSION, NodeType, Task, TaskType
@@ -39,7 +40,7 @@ class ExecutorOutput(BaseModel):
 
     contract_version: str = Field(default=CONTRACT_VERSION)
     task_id: str = Field(min_length=1)
-    result: str = Field(min_length=1)
+    result: Union[str, int, float] = Field(min_length=1)
     artifacts: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
