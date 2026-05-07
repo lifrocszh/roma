@@ -2,28 +2,14 @@
 name = "roma"
 version = "0.1.0"
 description = "ROMA: Recursive Open Meta-Agent Framework"
-readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
     "pyyaml>=6.0",
-    "aiofiles>=24.0.0",
     "tavily-python>=0.5.0",
     "typer>=0.12.0",
     "openai>=1.0.0",
-    "datasets>=3.0.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.24.0",
-    "pytest-mock>=3.14.0",
-]
-all = [
-    "roma[dev]",
-    "httpx>=0.27.0",
-    "rich>=13.0.0",
 ]
 
 [project.scripts]
@@ -35,10 +21,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
-
-[dependency-groups]
-dev = [
-    "pytest>=9.0.3",
-    "pytest-asyncio>=1.3.0",
-    "pytest-mock>=3.15.1",
-]

@@ -1,1 +1,0 @@
-print(open(r"C:\Study\Projectsoma\src\evaluation\eval_MMLU_pro.py","r",encoding="utf-8").read()[:100])

@@ -6,20 +6,31 @@ import json
 import os
 from typing import Any
 
+from dotenv import load_dotenv
 from openai import OpenAI
+from pathlib import Path
+
+load_dotenv(Path("config/.env"))
+
+def _resolve_key(*names: str) -> str | None:
+    for name in names:
+        val = os.getenv(name)
+        if val:
+            return val
+    return None
 
 
 _OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 def _build_client() -> OpenAI | None:
-    api_key = os.getenv("ROMA_API_KEY")
     base_url = os.getenv("ROMA_BASE_URL")
 
+    api_key = _resolve_key("ROMA_API_KEY")
     if api_key and base_url:
         return OpenAI(api_key=api_key, base_url=base_url)
 
-    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    openrouter_key = _resolve_key("OPENROUTER_API_KEY", "openrouter_api_key")
     if openrouter_key:
         return OpenAI(
             api_key=openrouter_key,
@@ -30,18 +41,19 @@ def _build_client() -> OpenAI | None:
             },
         )
 
-    deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+    deepseek_key = _resolve_key("DEEPSEEK_API_KEY", "deepseek_api_key")
     if deepseek_key:
         return OpenAI(api_key=deepseek_key, base_url=base_url or "https://api.deepseek.com")
 
-    openai_key = os.getenv("OPENAI_API_KEY")
+    openai_key = _resolve_key("OPENAI_API_KEY", "openai_api_key")
     if openai_key:
         return OpenAI(api_key=openai_key, base_url=base_url or "https://api.openai.com/v1")
 
     return None
 
 
-_DEFAULT_MODEL = os.getenv("ROMA_MODEL", "deepseek-v4-flash")
+_DEFAULT_MODEL = _resolve_key("ROMA_MODEL", "openrouter_model") or "deepseek-v4-flash"
+print(f"default model: {_DEFAULT_MODEL}")
 
 
 def llm_judge(
@@ -55,21 +67,6 @@ def llm_judge(
     max_tokens: int | None = None,
     model: str | None = None,
 ) -> dict[str, Any] | None:
-    """Call the LLM with structured JSON output and Chain-of-Thought reasoning.
-
-    Args:
-        system: System-level role instruction.
-        instructions: The specific task to perform.
-        context: Available context or tool outputs.
-        output_schema: Dict mapping field names to descriptions.
-        examples: Optional list of (input_text, output_json_string) few-shot examples.
-        temperature: Sampling temperature (0.0 = deterministic).
-        max_tokens: Max tokens in response.
-        model: Override model name.
-
-    Returns:
-        Parsed JSON dict with the requested fields, or None on failure.
-    """
     client = _build_client()
     if client is None:
         return None
@@ -106,7 +103,7 @@ def llm_judge(
     try:
         response = client.chat.completions.create(
             model=chosen_model,
-            messages=messages,  # type: ignore[arg-type]
+            messages=messages,
             temperature=temperature,
             max_tokens=max_tokens or 2048,
             response_format={"type": "json_object"},
@@ -137,7 +134,6 @@ def llm_decision(
     max_tokens: int | None = None,
     model: str | None = None,
 ) -> dict[str, Any] | None:
-    """Same as llm_judge but with relaxed output requirements for simpler decisions."""
     return llm_judge(
         system=system,
         instructions=instructions,
@@ -159,7 +155,6 @@ def llm_freeform(
     max_tokens: int | None = None,
     model: str | None = None,
 ) -> str | None:
-    """Call the LLM for free-form text generation (no structured output)."""
     client = _build_client()
     if client is None:
         return None
@@ -178,7 +173,7 @@ def llm_freeform(
     try:
         response = client.chat.completions.create(
             model=chosen_model,
-            messages=messages,  # type: ignore[arg-type]
+            messages=messages,
             temperature=temperature,
             max_tokens=max_tokens or 4096,
         )

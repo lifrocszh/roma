@@ -11,6 +11,7 @@ plan.md
 
 # Local config
 config/api_keys.toml
+.env
 
 
 # Virtual environments

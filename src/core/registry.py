@@ -14,8 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.core.models import CONTRACT_VERSION, TaskType
-from src.core.signatures import Aggregator, Atomizer, Executor, Planner
+from src.core.models import CONTRACT_VERSION
 
 
 class RegistryError(ValueError):
@@ -409,39 +408,19 @@ class MCPToolkit(BaseTool):
 class RuntimeLimits:
     """Guard rails for recursive ROMA execution."""
 
-    max_recursion_depth: int = 12
+    max_recursion_depth: int = 20
     max_subtasks_per_plan: int = 12
     max_total_tasks: int = 256
     max_expansions_per_goal: int = 3
     max_parallelism: int = 4
 
 
-@dataclass(slots=True)
-class ExecutorBinding:
-    """Executor instance plus the tools it may access."""
-
-    executor: Executor
-    tool_names: frozenset[str] = field(default_factory=frozenset)
-
-
-class ExecutorToolView:
-    """Restricted tool surface exposed to a specific executor."""
-
-    def __init__(self, tools: dict[str, BaseTool]) -> None:
-        self._tools = dict(tools)
-
-    def get(self, name: str) -> BaseTool:
-        try:
-            return self._tools[name]
-        except KeyError as exc:
-            raise ToolError(f"tool {name!r} is not allowed for this executor") from exc
-
-    def list_names(self) -> list[str]:
-        return sorted(self._tools)
-
-
 class ComponentRegistry:
-    """Holds component instances, executor routing, and tool permissions.
+    """Holds component instances and a shared tool pool.
+
+    Unlike the earlier design with per-executor tool restrictions, this registry
+    gives the single executor access to all registered tools. The planner
+    determines which tools are relevant per-task through the task.task_type.
 
     When *verbose* is ``True``, every tool call is printed to stdout with its
     inputs, outputs, duration, and success/failure status.
@@ -450,13 +429,15 @@ class ComponentRegistry:
     def __init__(
         self,
         *,
-        atomizer: Atomizer,
-        planner: Planner,
-        aggregator: Aggregator,
+        executor: Any,
+        atomizer: Any,
+        planner: Any,
+        aggregator: Any,
         limits: RuntimeLimits | None = None,
         logger: logging.Logger | None = None,
         verbose: bool = False,
     ) -> None:
+        self.executor = executor
         self.atomizer = atomizer
         self.planner = planner
         self.aggregator = aggregator
@@ -464,60 +445,16 @@ class ComponentRegistry:
         self.logger = logger or logging.getLogger("roma.registry")
         self._verbose = verbose
         self._tools: dict[str, BaseTool] = {}
-        self._executors: dict[TaskType, ExecutorBinding] = {}
-        self._lock = threading.Lock()
 
     def register_tool(self, tool: BaseTool) -> None:
-        with self._lock:
-            if self._verbose:
-                tool = _verbose_tool_wrapper(tool)
-            self._tools[tool.name] = tool
-
-    def register_executor(
-        self,
-        executor: Executor,
-        *,
-        task_types: frozenset[TaskType] | None = None,
-        allowed_tools: set[str] | frozenset[str] | None = None,
-    ) -> None:
-        supported = task_types or executor.supported_task_types
-        binding = ExecutorBinding(
-            executor=executor,
-            tool_names=frozenset(allowed_tools or set()),
-        )
-        self._bind_tools(binding)
-        with self._lock:
-            for task_type in supported:
-                self._executors[task_type] = binding
-
-    def get_executor(self, task_type: TaskType) -> Executor:
-        try:
-            return self._executors[task_type].executor
-        except KeyError as exc:
-            raise RegistryError(f"no executor registered for task type {task_type.value}") from exc
-
-    def get_executor_tool_names(self, task_type: TaskType) -> list[str]:
-        try:
-            return sorted(self._executors[task_type].tool_names)
-        except KeyError as exc:
-            raise RegistryError(f"no executor registered for task type {task_type.value}") from exc
+        if self._verbose:
+            tool = _verbose_tool_wrapper(tool)
+        self._tools[tool.name] = tool
 
     def validate(self) -> None:
-        missing = [task_type.value for task_type in TaskType if task_type not in self._executors]
+        missing = [t for t in ("calculator", "web_search", "code_sandbox") if t not in self._tools]
         if missing:
-            raise RegistryError(f"missing executors for task types: {', '.join(missing)}")
-
-    def _bind_tools(self, binding: ExecutorBinding) -> None:
-        allowed = {name: self._tools[name] for name in binding.tool_names if name in self._tools}
-        missing = sorted(name for name in binding.tool_names if name not in self._tools)
-        if missing:
-            raise RegistryError(f"executor references unknown tools: {', '.join(missing)}")
-
-        set_tools = getattr(binding.executor, "set_tools", None)
+            raise RegistryError(f"missing tools: {', '.join(missing)}")
+        set_tools = getattr(self.executor, "set_tools", None)
         if callable(set_tools):
-            set_tools(ExecutorToolView(allowed))
-
-
-def resolve_future_result(future: Future[Any]) -> Any:
-    """Unwrap concurrent future exceptions consistently."""
-    return future.result()
+            set_tools(dict(self._tools))

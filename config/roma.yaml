@@ -3,17 +3,5 @@ demo:
   task_type: "WRITE"
   context_input: "Status: tests pass. Risk: deployment timing."
 
-optimize:
-  module_name: "write"
-  base_prompt: "Role: write clear, purpose-driven prose."
-  held_out_signals:
-    - schema
-    - contract
-    - minimal
-  rounds: 2
-  proposals_per_round: 4
-  topn: 2
-  seed: 21
-
 runtime:
-  api_keys_path: "config/api_keys.toml"
+  api_keys_path: ".env"
