@@ -17,6 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.core.models import CONTRACT_VERSION
 
 
+OpenAIToolSpec = dict[str, Any]
+
+
 class RegistryError(ValueError):
     """Raised when the controller registry is incomplete or inconsistent."""
 
@@ -49,6 +52,13 @@ class BaseTool(ABC):
     def invoke(self, **kwargs: Any) -> ToolResult:
         raise NotImplementedError
 
+    @abstractmethod
+    def tool_spec(self) -> OpenAIToolSpec:
+        """Return the OpenAI-compatible function-calling definition."""
+
+    def invoke_with_args(self, args: dict[str, Any]) -> ToolResult:
+        return self.invoke(**args)
+
     def _log_result(self, result: ToolResult) -> ToolResult:
         self._logger.info(
             "tool=%s ok=%s duration_ms=%.2f metadata=%s",
@@ -60,17 +70,11 @@ class BaseTool(ABC):
         return result
 
 
-# ---------------------------------------------------------------------------
-# Verbose tool wrapper -- prints inputs/outputs to stdout for observability
-# ---------------------------------------------------------------------------
-
-
 def _verbose_tool_wrapper(tool: BaseTool) -> BaseTool:
     """Wrap a tool so every invocation prints inputs and outputs to stdout."""
     original_invoke = tool.invoke
 
     def _invoke_with_trace(**kwargs: Any) -> ToolResult:
-        # Format the kwargs for display
         args_preview = ", ".join(
             f"{k}={repr(v)[:120]}" for k, v in kwargs.items()
         )
@@ -112,9 +116,29 @@ class WebSearchToolkit(BaseTool):
         self.api_key = api_key
         self.max_results = max_results
 
-    # ------------------------------------------------------------------
-    # Internal Tavily client helper
-    # ------------------------------------------------------------------
+    def tool_spec(self) -> OpenAIToolSpec:
+        return {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web for information or extract content from a URL. Use 'search' action for general queries, 'extract' to get full page content from a specific URL.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["search", "extract"],
+                            "description": "'search' to find information on a topic, 'extract' to get the full content of a specific URL",
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "The search query or URL to extract from",
+                        },
+                    },
+                    "required": ["action", "query"],
+                },
+            },
+        }
 
     def _client(self) -> object:
         if not self.api_key:
@@ -126,26 +150,17 @@ class WebSearchToolkit(BaseTool):
         except ImportError as exc:
             raise ToolError("tavily-python is not installed") from exc
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def invoke(self, **kwargs: Any) -> ToolResult:
         action = kwargs.get("action", "search")
         if action == "extract":
             return self._extract(**kwargs)
         return self._search(**kwargs)
 
-    # ------------------------------------------------------------------
-    # Search (Tavily)
-    # ------------------------------------------------------------------
-
     def _search(self, **kwargs: Any) -> ToolResult:
         query = kwargs.get("query")
         if not query:
             raise ToolError("web_search (search) requires a non-empty query")
 
-        # Tavily API enforces a 400-char limit; truncate gracefully
         if len(query) > 400:
             query = query[:397] + "..."
 
@@ -162,16 +177,11 @@ class WebSearchToolkit(BaseTool):
         )
         return self._log_result(result)
 
-    # ------------------------------------------------------------------
-    # Extract (Tavily client.extract)
-    # ------------------------------------------------------------------
-
     def _extract(self, **kwargs: Any) -> ToolResult:
         url = kwargs.get("url") or kwargs.get("query")
         if not url:
             raise ToolError("web_search (extract) requires a url")
 
-        # Normalise: prepend https:// if no scheme present
         url = url.strip()
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
@@ -210,7 +220,6 @@ class WebSearchToolkit(BaseTool):
         )
         return self._log_result(result)
 
-
 class CodeSandbox(BaseTool):
     """Local subprocess sandbox for code and shell execution."""
 
@@ -226,6 +235,30 @@ class CodeSandbox(BaseTool):
         self.python_executable = python_executable
         self.working_directory = Path(working_directory) if working_directory else None
         self.timeout_seconds = timeout_seconds
+
+    def tool_spec(self) -> OpenAIToolSpec:
+        return {
+            "type": "function",
+            "function": {
+                "name": "code_sandbox",
+                "description": "Execute Python or shell code in a secure sandbox. Use for calculations, data processing, running scripts, or any task that needs code execution.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "language": {
+                            "type": "string",
+                            "enum": ["python", "shell"],
+                            "description": "The programming language to use",
+                        },
+                        "code": {
+                            "type": "string",
+                            "description": "The code to execute. Use print() to output results.",
+                        },
+                    },
+                    "required": ["language", "code"],
+                },
+            },
+        }
 
     def invoke(self, **kwargs: Any) -> ToolResult:
         language = kwargs.get("language", "python")
@@ -261,20 +294,34 @@ class CodeSandbox(BaseTool):
         )
         return self._log_result(result)
 
-
 class Calculator(BaseTool):
     """Safe arithmetic calculator for evaluating math expressions.
 
     Supports basic arithmetic (``+``, ``-``, ``*``, ``/``, ``//``, ``%``, ``**``),
     parentheses, and common math functions via Python's ``math`` module.
-
-    Usage::
-
-        tool.invoke(expression="(3 + 5) * 2")
     """
 
     def __init__(self, logger: logging.Logger | None = None) -> None:
         super().__init__(name="calculator", logger=logger)
+
+    def tool_spec(self) -> OpenAIToolSpec:
+        return {
+            "type": "function",
+            "function": {
+                "name": "calculator",
+                "description": "Perform mathematical calculations. Supports basic arithmetic (+, -, *, /, //, %, **), parentheses, and math functions (sqrt, sin, cos, log, etc.).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expression": {
+                            "type": "string",
+                            "description": "The mathematical expression to evaluate (e.g., '(3 + 5) * 2' or 'sqrt(144)')",
+                        },
+                    },
+                    "required": ["expression"],
+                },
+            },
+        }
 
     def invoke(self, **kwargs: Any) -> ToolResult:
         expression = kwargs.get("expression") or kwargs.get("query")
@@ -284,6 +331,7 @@ class Calculator(BaseTool):
         started = time.perf_counter()
         try:
             result = self._evaluate(expression)
+            print(f"Calculating: {expression} = {result}")
             ok = True
             output = str(result)
             extra = {"expression": expression, "result": result}
@@ -304,12 +352,10 @@ class Calculator(BaseTool):
 
     @staticmethod
     def _evaluate(expr: str) -> float | int:
-        """Evaluate a mathematical expression using a safe AST-based evaluator."""
         import ast
         import math
         import operator as op
 
-        # Allowed operators
         operators: dict[type, object] = {
             ast.Add: op.add,
             ast.Sub: op.sub,
@@ -322,7 +368,6 @@ class Calculator(BaseTool):
             ast.UAdd: op.pos,
         }
 
-        # Allowed names (constants and math functions)
         allowed_names: dict[str, object] = {
             "pi": math.pi,
             "e": math.e,
@@ -377,39 +422,19 @@ class Calculator(BaseTool):
                 val = allowed_names.get(node.id)
                 if val is None:
                     raise NameError(f"unknown name: {node.id}")
-                return val  # type: ignore[return-value]
+                return val
             raise TypeError(f"unsupported syntax: {type(node).__name__}")
 
         tree = ast.parse(expr.strip(), mode="eval")
         return _eval(tree.body)
 
 
-class FileToolkit(BaseTool):
-    """Placeholder for Stage 1 file toolkit work."""
-
-    def __init__(self) -> None:
-        super().__init__(name="file_toolkit")
-
-    def invoke(self, **kwargs: Any) -> ToolResult:
-        raise NotImplementedError("FileToolkit is intentionally not implemented in Stage 1")
-
-
-class MCPToolkit(BaseTool):
-    """Placeholder for Stage 1 MCP toolkit work."""
-
-    def __init__(self) -> None:
-        super().__init__(name="mcp_toolkit")
-
-    def invoke(self, **kwargs: Any) -> ToolResult:
-        raise NotImplementedError("MCPToolkit is intentionally not implemented in Stage 1")
-
-
 @dataclass(slots=True)
 class RuntimeLimits:
     """Guard rails for recursive ROMA execution."""
 
-    max_recursion_depth: int = 20
-    max_subtasks_per_plan: int = 12
+    max_recursion_depth: int = 8
+    max_subtasks_per_plan: int = 6
     max_total_tasks: int = 256
     max_expansions_per_goal: int = 3
     max_parallelism: int = 4
@@ -418,12 +443,11 @@ class RuntimeLimits:
 class ComponentRegistry:
     """Holds component instances and a shared tool pool.
 
-    Unlike the earlier design with per-executor tool restrictions, this registry
-    gives the single executor access to all registered tools. The planner
-    determines which tools are relevant per-task through the task.task_type.
+    Stores both the tool instances (for invocation) and their OpenAI-compatible
+    definitions (for LLM tool selection). The atomizer decides which tools to
+    grant per task, and only those tools are passed to the executor.
 
-    When *verbose* is ``True``, every tool call is printed to stdout with its
-    inputs, outputs, duration, and success/failure status.
+    When *verbose* is ``True``, every tool call is printed to stdout.
     """
 
     def __init__(
@@ -451,10 +475,17 @@ class ComponentRegistry:
             tool = _verbose_tool_wrapper(tool)
         self._tools[tool.name] = tool
 
+    def get_tool_definitions(self) -> list[OpenAIToolSpec]:
+        """Return all registered tools in OpenAI-compatible format."""
+        return [tool.tool_spec() for tool in self._tools.values()]
+
+    def get_tool(self, name: str) -> BaseTool:
+        try:
+            return self._tools[name]
+        except KeyError:
+            raise ToolError(f"tool {name!r} not found in registry")
+
     def validate(self) -> None:
         missing = [t for t in ("calculator", "web_search", "code_sandbox") if t not in self._tools]
         if missing:
             raise RegistryError(f"missing tools: {', '.join(missing)}")
-        set_tools = getattr(self.executor, "set_tools", None)
-        if callable(set_tools):
-            set_tools(dict(self._tools))

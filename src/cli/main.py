@@ -15,10 +15,9 @@ def run(
     config: str = typer.Option(None, "--config", help="Path to config file."),
     context: str = typer.Option(None, "--context", help="Optional context passed to the root task."),
     api_keys: str = typer.Option(None, "--api-keys", help="Path to TOML or .env file with API keys."),
-    quiet: bool = typer.Option(False, "--quiet", help="Suppress intermediate events, print only final output."),
-    trace: bool = typer.Option(False, "--trace", help="Print hierarchical trace tree after execution."),
+    quiet: bool = typer.Option(False, "--quiet", help="Suppress intermediate streaming, show only result."),
 ) -> None:
-    run_command(task=task, config_path=config, context=context, api_keys_path=api_keys, quiet=quiet, show_trace=trace)
+    run_command(task=task, config_path=config, context=context, api_keys_path=api_keys, quiet=quiet)
 
 
 def main() -> None:

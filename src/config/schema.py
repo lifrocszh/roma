@@ -8,8 +8,7 @@ from src.core.registry import RuntimeLimits
 
 
 class DemoTaskConfig(BaseModel):
-    goal: str = "Write a multi-part project update then refine the final message"
-    task_type: str = "WRITE"
+    goal: str = "What is the capital of France?"
     context_input: str | None = None
 
 
@@ -20,4 +19,4 @@ class RuntimeConfig(BaseModel):
 
 class AppConfig(BaseModel):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
-    demo: DemoTaskConfig = Field(default_factory=lambda: DemoTaskConfig(goal="Write a multi-part project update then refine the final message"))
+    demo: DemoTaskConfig = Field(default_factory=DemoTaskConfig)

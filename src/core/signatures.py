@@ -13,6 +13,7 @@ class AtomizerDecision(BaseModel):
     contract_version: str = Field(default=CONTRACT_VERSION)
     node_type: NodeType
     rationale: str = Field(min_length=1)
+    granted_tools: list[str] = Field(default_factory=list)
 
 
 class PlannerOutput(BaseModel):

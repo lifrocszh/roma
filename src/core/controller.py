@@ -1,5 +1,3 @@
-"""Recursive controller that solves tasks via plan-execute-aggregate."""
-
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -56,6 +54,12 @@ class RomaController:
         self.registry = registry
         self.logger = logger or logging.getLogger("roma.controller")
         self.event_callback = event_callback
+        self._seed_atomizer()
+
+    def _seed_atomizer(self) -> None:
+        set_defs = getattr(self.registry.atomizer, "set_tool_definitions", None)
+        if callable(set_defs):
+            set_defs(self.registry.get_tool_definitions())
 
     def solve(self, task: Task) -> SolveOutcome:
         self.registry.validate()
@@ -71,39 +75,44 @@ class RomaController:
         trace = ExecutionTrace(
             task_id=task.id,
             goal=task.goal,
-            task_type=task.task_type,
+            # task_type=task.task_type,
             parent_task_id=task.parent_id,
             input_context=task.context_input,
         )
-        self._emit(trace, "task_started", {"depth": depth, "task_type": task.task_type.value})
+        self._emit("task_started", {"depth": depth, "goal": task.goal[:100]}, trace)
 
         try:
             task_with_depth = task.model_copy(update={"metadata": {**task.metadata, "_depth": depth}})
             decision = self.registry.atomizer.decide(task_with_depth)
             trace.node_type = decision.node_type
-            self._emit(trace, "atomizer_decision", {"node_type": decision.node_type.value, "rationale": decision.rationale})
+            self._emit("atomizer_decision", {
+                "node_type": decision.node_type.value,
+                "rationale": decision.rationale,
+                "granted_tools": decision.granted_tools,
+            }, trace)
 
             if decision.node_type == NodeType.EXECUTE:
-                return self._execute(task, trace, depth)
+                return self._execute(task, trace, depth, decision)
             return self._plan_and_solve(task, trace, decision, depth, state)
         except (RecursionGuardError, PlannerValidationError, ControllerError):
             raise
         except Exception as exc:
-            self._emit(trace, "task_failed", {"error": str(exc)})
+            self._emit("task_failed", {"error": str(exc)}, trace)
             raise TaskExecutionError(task.id, str(exc)) from exc
 
-    def _execute(self, task: Task, trace: ExecutionTrace, depth: int) -> SolveOutcome:
+    def _execute(self, task: Task, trace: ExecutionTrace, depth: int, decision: AtomizerDecision) -> SolveOutcome:
+        granted = {name: self.registry._tools[name] for name in decision.granted_tools if name in self.registry._tools}
+        set_tools = getattr(self.registry.executor, "set_tools", None)
+        if callable(set_tools):
+            set_tools(granted)
+
         executor = self.registry.executor
-        self._emit(trace, "executor_selected", {
-            "executor": type(executor).__name__,
-            "task_type": task.task_type.value,
-        })
         started = time.perf_counter()
         output = executor.execute(task)
         duration_ms = (time.perf_counter() - started) * 1000
         updated = task.model_copy(update={"result": output.result})
         trace.output_summary = output.result
-        self._emit(trace, "executor_completed", {"duration_ms": duration_ms, "result_preview": output.result[:200]})
+        self._emit("executor_completed", {"duration_ms": duration_ms, "result_preview": output.result[:200], "granted_tools": decision.granted_tools}, trace)
         return SolveOutcome(task=updated, output=output, trace=trace)
 
     def _plan_and_solve(
@@ -114,17 +123,17 @@ class RomaController:
         self._validate_plan(task, plan, decision, state)
 
         batches = plan.task_graph.dependency_batches(external_ids={task.id})
-        self._emit(trace, "planner_output", {
+        self._emit("planner_output", {
             "subtask_count": len(plan.subtasks),
             "dependency_batches": [[s.id for s in b] for b in batches],
-        })
+        }, trace)
 
         outcomes = self._solve_subtasks(task, trace, plan.task_graph, depth, state)
 
         ordered = [outcomes[s.id].output for s in plan.task_graph.topological_order(external_ids={task.id})]
         aggregation = self.registry.aggregator.aggregate(task, ordered)
         trace.output_summary = aggregation.summary
-        self._emit(trace, "aggregation_completed", {"child_count": len(ordered), "summary_preview": aggregation.summary[:200]})
+        self._emit("aggregation_completed", {"child_count": len(ordered), "summary_preview": aggregation.summary[:200]}, trace)
 
         updated = task.model_copy(update={"result": aggregation.summary})
         output = ExecutorOutput(task_id=aggregation.task_id, result=aggregation.summary, metadata=aggregation.metadata)
@@ -139,8 +148,8 @@ class RomaController:
         parallelism = max(1, min(self.registry.limits.max_parallelism, max((len(b) for b in batches), default=1)))
 
         with ThreadPoolExecutor(max_workers=parallelism) as pool:
-            for batch_index, batch in enumerate(batches):
-                self._emit(trace, "batch_started", {"batch_index": batch_index, "task_ids": [s.id for s in batch]})
+            for batch in batches:
+                self._emit("batch_started", {"task_ids": [s.id for s in batch]}, trace)
 
                 prepared = []
                 for subtask in batch:
@@ -153,11 +162,11 @@ class RomaController:
 
                 futures = {s.id: pool.submit(self._solve, task=s, depth=depth + 1, state=state) for s in prepared}
                 for subtask in sorted(prepared, key=lambda x: x.id):
-                    self._emit(trace, "child_started", {"task_id": subtask.id, "goal": subtask.goal[:120]})
+                    self._emit("child_started", {"task_id": subtask.id, "goal": subtask.goal[:120]}, trace)
                     outcome = futures[subtask.id].result()
                     outcomes[subtask.id] = outcome
                     trace.append_child(outcome.trace)
-                    self._emit(trace, "child_completed", {"task_id": subtask.id, "result_preview": outcome.output.result[:120]})
+                    self._emit("child_completed", {"task_id": subtask.id, "result_preview": outcome.output.result[:120]}, trace)
         return outcomes
 
     def _validate_plan(self, task: Task, plan: Any, decision: AtomizerDecision, state: _SolveState) -> None:
@@ -171,13 +180,12 @@ class RomaController:
             if st.parent_id != task.id:
                 raise PlannerValidationError(f"subtask {st.id} parent_id mismatch: got {st.parent_id!r}, expected {task.id!r}")
 
-        sig = (task.goal.strip().lower(), task.task_type.value)
+        sig = task.goal.strip().lower()
         state.expansion_counts[sig] = state.expansion_counts.get(sig, 0) + 1
         if state.expansion_counts[sig] > self.registry.limits.max_expansions_per_goal:
-            raise RecursionGuardError(f"repeated expansion limit for goal: {state.expansion_counts[sig]}")
+            raise RecursionGuardError(f"repeated expansion limit for goal: {task.goal[:80]}")
 
-    def _emit(self, trace: ExecutionTrace, kind: str, payload: dict[str, Any]) -> None:
-        trace.append_event(kind, payload)
+    def _emit(self, kind: str, payload: dict[str, Any], trace: ExecutionTrace | None = None) -> None:
         if self.event_callback:
             try:
                 self.event_callback(kind, payload, trace)

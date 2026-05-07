@@ -35,11 +35,11 @@ class TaskGraph(BaseModel):
     tasks: dict[str, Task] = Field(default_factory=dict)
 
     @classmethod
-    def from_tasks(cls, tasks: Iterable[Task]) -> TaskGraph:
+    def from_tasks(cls, tasks: Iterable[Task], *, external_ids: set[str] | None = None) -> TaskGraph:
         graph = cls()
         for task in tasks:
             graph.add_task(task)
-        graph.validate()
+        graph.validate(external_ids=external_ids)
         return graph
 
     def add_task(self, task: Task) -> None:

@@ -1,5 +1,3 @@
-"""Core data models for Stage 0 of the ROMA reimplementation."""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -13,30 +11,15 @@ CONTRACT_VERSION = "0.1"
 
 
 def utc_now() -> datetime:
-    """Return a timezone-aware timestamp for serialized records."""
     return datetime.now(UTC)
 
 
-class TaskType(str, Enum):
-    """High-level task categories used for routing later stages."""
-
-    GENERAL = "GENERAL"
-    RETRIEVE = "RETRIEVE"
-    THINK = "THINK"
-    WRITE = "WRITE"
-    CODE = "CODE"
-
-
 class NodeType(str, Enum):
-    """Recursive routing decision for a task node."""
-
     PLAN = "PLAN"
     EXECUTE = "EXECUTE"
 
 
 class ArtifactHandle(BaseModel):
-    """A stable reference to an artifact stored outside prompts."""
-
     model_config = ConfigDict(frozen=True)
 
     key: str = Field(min_length=1)
@@ -44,14 +27,11 @@ class ArtifactHandle(BaseModel):
 
 
 class Task(BaseModel):
-    """Canonical task record shared across the controller and components."""
-
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     contract_version: str = Field(default=CONTRACT_VERSION)
     id: str = Field(min_length=1)
     goal: str = Field(min_length=1)
-    task_type: TaskType = TaskType.GENERAL
     dependencies: list[str] = Field(default_factory=list)
     context_input: str | None = None
     result: str | None = None
@@ -79,8 +59,6 @@ class Task(BaseModel):
 
 
 class TraceEvent(BaseModel):
-    """An immutable decision or output captured during execution."""
-
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     timestamp: datetime = Field(default_factory=utc_now)
@@ -89,15 +67,12 @@ class TraceEvent(BaseModel):
 
 
 class ExecutionTrace(BaseModel):
-    """Hierarchical execution trace that mirrors the recursive solve tree."""
-
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     contract_version: str = Field(default=CONTRACT_VERSION)
     task_id: str = Field(min_length=1)
     goal: str = Field(min_length=1)
     node_type: NodeType | None = None
-    task_type: TaskType | None = None
     parent_task_id: str | None = None
     input_context: str | None = None
     output_summary: str | None = None
@@ -105,24 +80,19 @@ class ExecutionTrace(BaseModel):
     child_traces: list[ExecutionTrace] = Field(default_factory=list)
 
     def append_event(self, kind: str, payload: dict[str, Any] | None = None) -> None:
-        """Append a trace event without mutating prior records."""
         self.events.append(TraceEvent(kind=kind, payload=payload or {}))
 
     def append_child(self, child: ExecutionTrace) -> None:
-        """Append a child trace while enforcing tree identity."""
         if child.parent_task_id != self.task_id:
             raise ValueError("child trace parent_task_id must match current task_id")
         self.child_traces.append(child)
 
 
 class PlanSubtask(BaseModel):
-    """A minimal planner-facing subtask record used before execution."""
-
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     id: str = Field(min_length=1)
     goal: str = Field(min_length=1)
-    task_type: TaskType = TaskType.GENERAL
     dependencies: list[str] = Field(default_factory=list)
     context_input: str | None = None
     artifacts: list[ArtifactHandle] = Field(default_factory=list)
@@ -131,5 +101,5 @@ class PlanSubtask(BaseModel):
     @classmethod
     def ensure_unique_dependencies(cls, values: list[str]) -> list[str]:
         if len(values) != len(set(values)):
-            raise ValueError("duplicate dependency identifiers are not allowed")
+            raise ValueError("duplicate identifiers are not allowed")
         return values
